@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Retro Receipt Generator - N STORE</title>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 html2canvas 用于导出图片 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <!-- 引入复古等宽字体与像素字体 -->
+    <link href="https://fonts.googleapis.com/css2?family=VT323&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    
+    <style>
+        body {
+            background-color: #050505;
+            color: #000;
+            font-family: 'Space Mono', monospace;
+            overflow-x: hidden;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .font-receipt {
+            font-family: 'VT323', monospace;
+        }
+
+        ::-webkit-scrollbar {
+            width: 0px;
+            background: transparent;
+        }
+
+        /* 控制小票初始画面的缩放与悬停动画 */
+        .receipt-view {
+            transform: rotate(-2.5deg) scale(0.75);
+            transform-origin: center center;
+        }
+        .receipt-view:hover {
+            transform: rotate(0deg) scale(0.78);
+        }
+        
+        @media (max-width: 640px) {
+            .receipt-view {
+                transform: rotate(-2.5deg) scale(0.65);
+            }
+            .receipt-view:hover {
+                transform: rotate(0deg) scale(0.68);
+            }
+        }
+
+        .receipt-content {
+            position: relative;
+            z-index: 10;
+        }
+
+        [contenteditable="true"] {
+            outline: none;
+            transition: background-color 0.2s;
+        }
+        [contenteditable="true"]:hover {
+            background-color: rgba(0,0,0,0.05);
+            cursor: text;
+        }
+        [contenteditable="true"]:focus {
+            background-color: rgba(0,0,0,0.1);
+        }
+
+        .receipt-divider {
+            border-top: 1px dashed #111;
+            margin: 12px 0;
+            opacity: 0.8;
+        }
+
+        /* 【核心修复】使用纯 CSS 径向渐变绘制锯齿边缘，彻底杜绝 SVG 跨域污染画布 */
+        .edge-top {
+            height: 8px;
+            background-image: radial-gradient(circle at 4px 0px, transparent 4px, var(--bg-color, #80c689) 5px);
+            background-size: 8px 8px;
+            background-repeat: repeat-x;
+        }
+        .edge-bottom {
+            height: 8px;
+            background-image: radial-gradient(circle at 4px 8px, transparent 4px, var(--bg-color, #80c689) 5px);
+            background-size: 8px 8px;
+            background-repeat: repeat-x;
+        }
+
+        #upload-overlay {
+            transition: opacity 0.3s ease;
+        }
+        .img-container:hover #upload-overlay {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center relative py-12 overflow-x-hidden">
+
+    <!-- 顶部 Toast 提示容器 -->
+    <div id="toast-container" class="fixed top-4 left-1/2 -translate-x-1/2 z-[9999] flex flex-col gap-2 pointer-events-none"></div>
+
+    <!-- 右上角：底色切换面板 -->
+    <div class="fixed top-6 right-6 border border-zinc-700 bg-black/80 backdrop-blur-sm p-4 z-50 flex flex-col items-start gap-3 rounded-lg shadow-2xl shadow-black">
+        <span class="text-zinc-400 text-xs tracking-widest uppercase">Color</span>
+        <div class="flex gap-2" id="color-picker">
+            <button class="w-6 h-6 rounded-full border-2 border-zinc-500 hover:border-white transition-colors color-btn" data-color="#f4f4f5" style="background-color: #f4f4f5;" title="Classic White"></button>
+            <button class="w-6 h-6 rounded-full border-2 border-zinc-500 hover:border-white transition-colors color-btn" data-color="#f0e6d2" style="background-color: #f0e6d2;" title="Faded Yellow"></button>
+            <button class="w-6 h-6 rounded-full border-2 border-zinc-500 hover:border-white transition-colors color-btn" data-color="#f0d5d9" style="background-color: #f0d5d9;" title="Light Pink"></button>
+            <button class="w-6 h-6 rounded-full border-2 border-white transition-colors color-btn" data-color="#80c689" style="background-color: #80c689;" title="Retro Green"></button>
+            <button class="w-6 h-6 rounded-full border-2 border-zinc-500 hover:border-white transition-colors color-btn" data-color="#bba7d4" style="background-color: #bba7d4;" title="Faded Purple"></button>
+        </div>
+    </div>
+
+    <!-- 右下角：导出按钮 -->
+    <button id="export-btn" class="fixed bottom-6 right-6 border border-zinc-700 bg-black/80 backdrop-blur-sm text-zinc-300 px-6 py-3 rounded-lg text-sm tracking-widest uppercase hover:bg-white hover:text-black transition-all z-50 group flex items-center gap-2 cursor-pointer shadow-2xl shadow-black">
+        <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+        <span>Save</span>
+    </button>
+
+    <!-- 小票外部容器：应用缩放类 receipt-view -->
+    <div id="receipt-wrapper" class="receipt-view transition-transform duration-500 m-auto flex-none w-[320px] sm:w-[360px]" style="filter: drop-shadow(0 25px 25px rgba(0,0,0,0.8));">
+        
+        <!-- 小票主体区域 -->
+        <div id="receipt-capture-area" class="w-full flex flex-col bg-transparent">
+            
+            <!-- 顶部锯齿 (纯CSS) -->
+            <div id="edge-top" class="edge-top w-full transition-colors duration-300" style="--bg-color: #80c689;"></div>
+
+            <!-- 小票内部内容区 -->
+            <div id="receipt-main-body" class="px-6 py-4 flex flex-col font-receipt text-[#000000] transition-colors duration-300 relative" style="background-color: #80c689;">
+                
+                <div class="receipt-content flex flex-col w-full relative z-10">
+                    <!-- 顶部大标题 -->
+                    <div class="text-center mb-4">
+                        <h1 contenteditable="true" class="text-5xl font-bold uppercase tracking-tighter leading-none mb-1">N STORE</h1>
+                        <div class="text-xs uppercase tracking-widest opacity-70">
+                            * * * * * Receipt * * * * *
+                        </div>
+                    </div>
+
+                    <!-- 基本信息块 -->
+                    <div class="text-sm opacity-80 leading-tight mb-2">
+                        <div class="flex justify-between">
+                            <span>Date:</span>
+                            <span contenteditable="true" id="current-date"></span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span>Terminal:</span>
+                            <span contenteditable="true">01-MAIN</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span>Served by:</span>
+                            <span contenteditable="true">Admin</span>
+                        </div>
+                    </div>
+
+                    <div class="receipt-divider"></div>
+
+                    <!-- 图像处理区域 -->
+                    <div class="relative w-full aspect-[4/3] my-4 bg-black/5 flex items-center justify-center overflow-hidden group img-container cursor-pointer rounded-sm" onclick="document.getElementById('image-upload').click()">
+                        <input type="file" id="image-upload" accept="image/*" class="hidden">
+                        
+                        <div id="upload-placeholder" class="text-center opacity-40 flex flex-col items-center">
+                            <svg class="w-8 h-8 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                            <span class="text-sm tracking-widest uppercase">Click to upload</span>
+                        </div>
+
+                        <!-- 图像展示 Canvas -->
+                        <canvas id="dither-canvas" class="absolute inset-0 w-full h-full object-cover opacity-100 hidden" style="image-rendering: pixelated;"></canvas>
+                        
+                        <div id="upload-overlay" class="absolute inset-0 bg-black/70 text-white flex items-center justify-center opacity-0 text-sm tracking-widest uppercase transition-opacity backdrop-blur-sm z-20">
+                            Change Image
+                        </div>
+                    </div>
+
+                    <div class="text-[10px] text-center opacity-60 uppercase tracking-widest mb-2 leading-none">
+                        [ Lo-Fi Dithered Print ]
+                    </div>
+
+                    <div class="receipt-divider"></div>
+
+                    <!-- 商品详情区域 -->
+                    <div id="item-list-container" class="flex flex-col gap-2 text-base my-2">
+                        <div class="flex justify-between items-end relative group item-row">
+                            <button class="delete-btn absolute -left-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer" title="Remove Item" onclick="removeItem(this)">×</button>
+                            <span contenteditable="true" class="flex-1 pr-2 uppercase">Custom Sticker Set</span>
+                            <span contenteditable="true">01</span>
+                        </div>
+                        <div class="flex justify-between items-end relative group item-row">
+                            <button class="delete-btn absolute -left-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer" title="Remove Item" onclick="removeItem(this)">×</button>
+                            <span contenteditable="true" class="flex-1 pr-2 uppercase">Artbook Vol.2</span>
+                            <span contenteditable="true">02</span>
+                        </div>
+                        <div class="flex justify-between items-end relative group item-row">
+                            <button class="delete-btn absolute -left-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer" title="Remove Item" onclick="removeItem(this)">×</button>
+                            <span contenteditable="true" class="flex-1 pr-2 uppercase">Coffee Bean 250g</span>
+                            <span contenteditable="true">01</span>
+                        </div>
+                    </div>
+                    
+                    <!-- 添加商品按钮 -->
+                    <div class="text-center mt-1">
+                        <button id="add-item-btn" class="text-[10px] opacity-40 hover:opacity-100 transition-opacity uppercase tracking-widest cursor-pointer inline-block py-1">
+                            + Add Item
+                        </button>
+                    </div>
+
+                    <div class="receipt-divider"></div>
+
+                    <!-- 总计 -->
+                    <div class="flex justify-between items-end text-xl my-1">
+                        <span>TOTAL:</span>
+                        <span contenteditable="true">¥ 158.00</span>
+                    </div>
+
+                    <div class="receipt-divider"></div>
+
+                    <!-- 底部条形码与落款 -->
+                    <div class="mt-4 flex flex-col items-center">
+                        <div class="w-full h-12 flex items-stretch justify-center opacity-90 gap-[2px]" id="barcode-container">
+                            <!-- JS 动态填充 -->
+                        </div>
+                        <div class="text-xs tracking-[0.3em] mt-1">
+                            1092837465912
+                        </div>
+                    </div>
+
+                    <div class="mt-6 text-center text-sm opacity-80 uppercase leading-tight tracking-wider">
+                        <p>T H A N K &nbsp;&nbsp;Y O U</p>
+                        <p>H A V E &nbsp;A &nbsp;N I C E &nbsp;D A Y</p>
+                    </div>
+                    
+                    <div class="mt-4 text-[10px] text-center opacity-40">
+                        Retain this copy for your records.
+                    </div>
+                </div> 
+            </div>
+            
+            <!-- 底部锯齿 (纯CSS) -->
+            <div id="edge-bottom" class="edge-bottom w-full transition-colors duration-300" style="--bg-color: #80c689;"></div>
+
+        </div>
+    </div>
+
+    <!-- 移动端专用的展示与保存遮罩层 -->
+    <div id="export-modal" class="fixed inset-0 bg-black/95 z-[100] hidden flex-col items-center justify-center p-6 backdrop-blur-md transition-opacity">
+        <div class="text-zinc-400 text-xs tracking-widest mb-6 uppercase text-center leading-loose">
+            <span class="bg-zinc-800 px-3 py-1 rounded-full text-white animate-pulse inline-block mb-2">Success</span><br/>
+            [ 长按下方图片保存至相册 ]<br/>
+            Long press image to save
+        </div>
+        <div class="w-full max-w-sm flex-1 relative flex items-center justify-center overflow-hidden">
+            <!-- 核心：添加 pointer-events: auto 和 touch-callout 允许原生长按保存 -->
+            <img id="export-image" class="max-w-full max-h-full object-contain drop-shadow-2xl rounded-sm" style="-webkit-touch-callout: default; pointer-events: auto; user-select: auto;" />
+        </div>
+        <button id="close-modal-btn" class="mt-8 border border-zinc-700 bg-zinc-900 text-zinc-300 px-8 py-3 rounded-full text-sm tracking-widest uppercase hover:bg-white hover:text-black transition-colors">
+            Close / 返回
+        </button>
+    </div>
+
+    <script>
+        // 自定义 Toast 提示功能（取代系统 alert）
+        function showToast(message, isError = false) {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `px-4 py-2 rounded shadow-lg text-sm tracking-wide transform transition-all duration-300 translate-y-[-100%] opacity-0 ${isError ? 'bg-red-600 text-white' : 'bg-white text-black'}`;
+            toast.innerText = message;
+            
+            container.appendChild(toast);
+            
+            // 动画入场
+            setTimeout(() => {
+                toast.classList.remove('translate-y-[-100%]', 'opacity-0');
+            }, 10);
+
+            // 3秒后移除
+            setTimeout(() => {
+                toast.classList.add('translate-y-[-100%]', 'opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        // 设备检测
+        function checkIsMobile() {
+            return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
+        }
+
+        // 初始化当前时间
+        const now = new Date();
+        const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+        document.getElementById('current-date').innerText = dateStr;
+
+        // 生成模拟条形码
+        const barcodeContainer = document.getElementById('barcode-container');
+        const pattern = [2, 1, 4, 1, 1, 3, 2, 2, 1, 4, 2, 1, 1, 1, 3, 2, 1, 4, 1, 2, 2, 1, 1];
+        pattern.forEach(width => {
+            const bar = document.createElement('div');
+            bar.className = 'bg-[#000000]';
+            bar.style.width = `${width * 2}px`;
+            barcodeContainer.appendChild(bar);
+        });
+
+        // 颜色切换逻辑 (纯 CSS 变量控制，绝对安全)
+        const colorBtns = document.querySelectorAll('.color-btn');
+        const receiptMainBody = document.getElementById('receipt-main-body');
+        const edgeTop = document.getElementById('edge-top');
+        const edgeBottom = document.getElementById('edge-bottom');
+
+        function updateReceiptColor(hexColor) {
+            receiptMainBody.style.backgroundColor = hexColor;
+            edgeTop.style.setProperty('--bg-color', hexColor);
+            edgeBottom.style.setProperty('--bg-color', hexColor);
+        }
+
+        updateReceiptColor('#80c689'); // 默认颜色
+
+        colorBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                colorBtns.forEach(b => b.classList.replace('border-white', 'border-zinc-500'));
+                e.target.classList.replace('border-zinc-500', 'border-white');
+                updateReceiptColor(e.target.getAttribute('data-color'));
+            });
+        });
+
+        // 商品行动态增删逻辑
+        const itemListContainer = document.getElementById('item-list-container');
+        const addItemBtn = document.getElementById('add-item-btn');
+
+        addItemBtn.addEventListener('click', () => {
+            const newRow = document.createElement('div');
+            newRow.className = 'flex justify-between items-end relative group item-row';
+            newRow.innerHTML = `
+                <button class="delete-btn absolute -left-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer" title="Remove Item" onclick="removeItem(this)">×</button>
+                <span contenteditable="true" class="flex-1 pr-2 uppercase">New Item</span>
+                <span contenteditable="true">01</span>
+            `;
+            itemListContainer.appendChild(newRow);
+        });
+
+        window.removeItem = function(btn) {
+            const allRows = itemListContainer.querySelectorAll('.item-row');
+            if (allRows.length > 1) {
+                btn.closest('.item-row').remove();
+            } else {
+                const row = btn.closest('.item-row');
+                row.classList.add('animate-pulse');
+                setTimeout(() => row.classList.remove('animate-pulse'), 500);
+            }
+        };
+
+        // 图片处理 (Floyd-Steinberg Dithering)
+        const imageUpload = document.getElementById('image-upload');
+        const canvas = document.getElementById('dither-canvas');
+        const ctx = canvas.getContext('2d');
+        const placeholder = document.getElementById('upload-placeholder');
+        const imgContainer = document.querySelector('.img-container');
+
+        imageUpload.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    canvas.classList.remove('hidden');
+                    placeholder.classList.add('hidden');
+
+                    const containerWidth = imgContainer.clientWidth;
+                    const containerHeight = imgContainer.clientHeight;
+                    
+                    // 【优化修复】强制将内部处理画布提升到 1080 宽度！
+                    // 生成高频像素点阵，防止 html2canvas 在 3 倍缩放时引发重采样产生的摩尔纹
+                    const targetWidth = 1080; 
+                    const targetHeight = targetWidth * (containerHeight / containerWidth);
+                    
+                    canvas.width = targetWidth;
+                    canvas.height = targetHeight;
+
+                    // 裁剪逻辑
+                    const imgRatio = img.width / img.height;
+                    const canvasRatio = canvas.width / canvas.height;
+                    
+                    let drawWidth = canvas.width;
+                    let drawHeight = canvas.height;
+                    let offsetX = 0;
+                    let offsetY = 0;
+
+                    if (imgRatio > canvasRatio) {
+                        drawWidth = canvas.height * imgRatio;
+                        offsetX = (canvas.width - drawWidth) / 2;
+                    } else {
+                        drawHeight = canvas.width / imgRatio;
+                        offsetY = (canvas.height - drawHeight) / 2;
+                    }
+
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+                    
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const pixels = imageData.data;
+
+                    // 灰度化
+                    for (let i = 0; i < pixels.length; i += 4) {
+                        let gray = pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114;
+                        pixels[i] = pixels[i + 1] = pixels[i + 2] = gray;
+                    }
+
+                    const w = canvas.width;
+                    const h = canvas.height;
+                    const getIndex = (x, y) => (y * w + x) * 4;
+
+                    // 抖动算法
+                    for (let y = 0; y < h; y++) {
+                        for (let x = 0; x < w; x++) {
+                            const idx = getIndex(x, y);
+                            const oldPixel = pixels[idx];
+                            const newPixel = oldPixel < 128 ? 0 : 255; 
+                            
+                            pixels[idx] = pixels[idx + 1] = pixels[idx + 2] = newPixel;
+                            const quantError = oldPixel - newPixel;
+
+                            if (x + 1 < w) {
+                                const i = getIndex(x + 1, y);
+                                pixels[i] = pixels[i] + quantError * (7 / 16);
+                            }
+                            if (x - 1 >= 0 && y + 1 < h) {
+                                const i = getIndex(x - 1, y + 1);
+                                pixels[i] = pixels[i] + quantError * (3 / 16);
+                            }
+                            if (y + 1 < h) {
+                                const i = getIndex(x, y + 1);
+                                pixels[i] = pixels[i] + quantError * (5 / 16);
+                            }
+                            if (x + 1 < w && y + 1 < h) {
+                                const i = getIndex(x + 1, y + 1);
+                                pixels[i] = pixels[i] + quantError * (1 / 16);
+                            }
+                        }
+                    }
+
+                    // 转换为透明与纯黑
+                    for(let i=0; i<pixels.length; i+=4) {
+                        if(pixels[i] > 128) { 
+                            pixels[i+3] = 0; // 白点变透明
+                        } else {
+                            pixels[i] = 0;
+                            pixels[i+1] = 0;
+                            pixels[i+2] = 0;
+                            pixels[i+3] = 255; // 黑点纯黑
+                        }
+                    }
+                    
+                    ctx.putImageData(imageData, 0, 0);
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // 导出图片核心逻辑
+        const exportBtn = document.getElementById('export-btn');
+        const wrapper = document.getElementById('receipt-wrapper');
+        const captureArea = document.getElementById('receipt-capture-area');
+        const exportModal = document.getElementById('export-modal');
+        const exportImage = document.getElementById('export-image');
+        const closeModalBtn = document.getElementById('close-modal-btn');
+
+        closeModalBtn.addEventListener('click', () => {
+            exportModal.classList.add('hidden');
+            exportModal.classList.remove('flex');
+            // 释放 ObjectURL 内存
+            if (exportImage.src) {
+                URL.revokeObjectURL(exportImage.src);
+                exportImage.src = '';
+            }
+        });
+
+        exportBtn.addEventListener('click', async () => {
+            const originalTransform = wrapper.style.transform;
+            const originalText = exportBtn.innerHTML;
+            
+            try {
+                // 强行关闭动画并移除缩放类，确保能在无干扰的 100% 比例下进行截图
+                wrapper.style.transition = 'none';
+                wrapper.classList.remove('receipt-view');
+                wrapper.style.transform = 'none';
+                
+                exportBtn.innerHTML = '<span class="animate-pulse flex items-center gap-2"><svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>Rendering...</span>';
+
+                // 等待 DOM 重排
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                // 【核心修复】完全移除了跨域污染隐患，且由于改用了 toBlob 内存占用极低，
+                // 现在不管是手机还是电脑，我们都可以放心地将 scale 拉高到 3！
+                // 高 scale 能够完美 1:1 映射我们在上面生成的 1080p 抖动像素，彻底消除缩放摩尔纹。
+                const resultCanvas = await html2canvas(captureArea, {
+                    backgroundColor: null,
+                    scale: 3, 
+                    useCORS: true,
+                    allowTaint: false, // 坚决不允许污染，如果有跨域直接报错而不是默默生成废件
+                    logging: false,
+                    onclone: function (clonedDoc) {
+                        const clonedDeleteBtns = clonedDoc.querySelectorAll('.delete-btn');
+                        clonedDeleteBtns.forEach(btn => btn.style.display = 'none');
+                        
+                        const clonedAddBtn = clonedDoc.getElementById('add-item-btn');
+                        if (clonedAddBtn) clonedAddBtn.style.display = 'none';
+                    }
+                });
+
+                // 【核心修复】使用 toBlob 生成二进制数据，而非体积庞大的 base64 字符串。避免手机端浏览器内存溢出。
+                resultCanvas.toBlob(function(blob) {
+                    if (!blob) {
+                        throw new Error("Canvas 渲染二进制 Blob 失败，可能是显存耗尽。");
+                    }
+                    
+                    const url = URL.createObjectURL(blob);
+                    
+                    if (checkIsMobile()) {
+                        // 移动端：显示遮罩层让用户长按保存
+                        exportImage.src = url;
+                        exportModal.classList.remove('hidden');
+                        exportModal.classList.add('flex');
+                    } else {
+                        // PC 端：直接触发下载
+                        const link = document.createElement('a');
+                        link.download = `receipt_nstore_${new Date().getTime()}.png`;
+                        link.href = url;
+                        link.click();
+                        // 稍微延迟后释放内存
+                        setTimeout(() => URL.revokeObjectURL(url), 1000);
+                    }
+                    
+                    // 恢复 UI
+                    wrapper.classList.add('receipt-view');
+                    wrapper.style.transform = originalTransform || ''; 
+                    setTimeout(() => wrapper.style.transition = '', 50);
+                    exportBtn.innerHTML = originalText;
+
+                }, 'image/png', 1.0);
+
+            } catch (err) {
+                console.error('Export failed:', err);
+                
+                // 发生任何错误都要确保 UI 能够恢复
+                wrapper.classList.add('receipt-view');
+                wrapper.style.transform = originalTransform || '';
+                setTimeout(() => wrapper.style.transition = '', 50);
+                exportBtn.innerHTML = originalText;
+                
+                showToast(`生成失败: ${err.message || '未知错误'}`, true);
+            }
+        });
+    </script>
+</body>
+</html>
