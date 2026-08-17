@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Retro Receipt Generator - N STORE</title>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 html2canvas 用于导出图片 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <!-- 引入复古等宽字体与像素字体 -->
+    <link href="https://fonts.googleapis.com/css2?family=VT323&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --receipt-bg: #80c689; /* 定义全局小票背景颜色变量，方便统一切换 */
+        }
+
+        body {
+            background-color: #050505;
+            color: #000;
+            font-family: 'Space Mono', monospace;
+            overflow-x: hidden;
+        }
+
+        .font-receipt {
+            font-family: 'VT323', monospace;
+        }
+
+        ::-webkit-scrollbar {
+            width: 0px;
+            background: transparent;
+        }
+
+        /* 控制小票初始画面的缩放与悬停动画 */
+        .receipt-view {
+            transform: rotate(-2.5deg) scale(0.75);
+            transform-origin: center top;
+            margin-top: 40px;
+        }
+        .receipt-view:hover {
+            transform: rotate(0deg) scale(0.78);
+        }
+        @media (max-width: 640px) {
+            .receipt-view {
+                transform: rotate(-2.5deg) scale(0.65);
+            }
+            .receipt-view:hover {
+                transform: rotate(0deg) scale(0.68);
+            }
+        }
+
+        .receipt-edge-top {
+            width: 100%;
+            height: 12px;
+            background-image: radial-gradient(circle at 6px 0px, transparent 6px, var(--receipt-bg) 6.2px);
+            background-size: 12px 12px;
+            background-position: bottom;
+            transition: background-image 0.3s;
+        }
+
+        .receipt-edge-bottom {
+            width: 100%;
+            height: 12px;
+            background-image: radial-gradient(circle at 6px 12px, transparent 6px, var(--receipt-bg) 6.2px);
+            background-size: 12px 12px;
+            background-position: top;
+            transition: background-image 0.3s;
+        }
+
+        /* 主体背景跟随 CSS 变量 */
+        #receipt-main-body {
+            background-color: var(--receipt-bg);
+            transition: background-color 0.3s;
+        }
+
+        /* 确保内容在最上层 */
+        .receipt-content {
+            position: relative;
+            z-index: 10;
+        }
+
+        [contenteditable="true"] {
+            outline: none;
+            transition: background-color 0.2s;
+        }
+        [contenteditable="true"]:hover {
+            background-color: rgba(0,0,0,0.05);
+            cursor: text;
+        }
+        [contenteditable="true"]:focus {
+            background-color: rgba(0,0,0,0.1);
+        }
+
+        .receipt-divider {
+            border-top: 1px dashed #111;
+            margin: 12px 0;
+            opacity: 0.8;
+        }
+
+        #upload-overlay {
+            transition: opacity 0.3s ease;
+        }
+        .img-container:hover #upload-overlay {
+            opacity: 1;
+        }
+
+        /* 允许图片原生被长按保存 */
+        .touch-callout-default {
+            -webkit-touch-callout: default;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center relative py-12 overflow-x-hidden">
+
+    <!-- 自定义 Toast 提示框 -->
+    <div id="toast" class="fixed top-6 left-1/2 -translate-x-1/2 z-[200] px-6 py-3 rounded text-sm tracking-widest font-bold uppercase transition-all duration-300 opacity-0 pointer-events-none text-white shadow-xl flex items-center gap-2" style="transform: translate(-50%, -20px);">
+        <span id="toast-msg">Message</span>
+    </div>
+
+    <!-- 右上角：底色切换面板 -->
+    <div class="fixed top-6 right-6 border border-zinc-700 bg-black/80 backdrop-blur-sm p-4 z-50 flex flex-col items-start gap-3">
+        <span class="text-zinc-400 text-xs tracking-widest uppercase">Color</span>
+        <div class="flex gap-2" id="color-picker">
+            <button class="w-6 h-6 border border-zinc-500 hover:border-white transition-colors color-btn" data-color="#f4f4f5" style="background-color: #f4f4f5;" title="Classic White"></button>
+            <button class="w-6 h-6 border border-zinc-500 hover:border-white transition-colors color-btn" data-color="#f0e6d2" style="background-color: #f0e6d2;" title="Faded Yellow"></button>
+            <button class="w-6 h-6 border border-zinc-500 hover:border-white transition-colors color-btn" data-color="#f0d5d9" style="background-color: #f0d5d9;" title="Light Pink"></button>
+            <button class="w-6 h-6 border border-white transition-colors color-btn" data-color="#80c689" style="background-color: #80c689;" title="Retro Green"></button>
+            <button class="w-6 h-6 border border-zinc-500 hover:border-white transition-colors color-btn" data-color="#bba7d4" style="background-color: #bba7d4;" title="Faded Purple"></button>
+        </div>
+    </div>
+
+    <!-- 右下角：导出按钮 -->
+    <button id="export-btn" class="fixed bottom-6 right-6 border border-zinc-700 bg-black/80 backdrop-blur-sm text-zinc-300 px-6 py-2 text-sm tracking-widest uppercase hover:bg-white hover:text-black transition-all z-50 group flex items-center gap-2 cursor-pointer">
+        <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+        <span>Save</span>
+    </button>
+
+    <div id="export-modal" class="fixed inset-0 z-[100] bg-black/95 hidden flex-col items-center justify-center p-4">
+        <div class="text-white/60 text-xs tracking-widest uppercase mb-4 text-center">
+            [ 长按下方图片保存至相册 ]<br>
+            LONG PRESS IMAGE TO SAVE
+        </div>
+        <img id="export-image" class="max-w-full max-h-[75vh] object-contain shadow-2xl touch-callout-default" src="" alt="Receipt">
+        <button id="close-modal-btn" class="mt-8 border border-zinc-700 bg-black text-zinc-300 px-8 py-3 text-sm tracking-widest uppercase hover:bg-white hover:text-black transition-all">
+            Close / 返回
+        </button>
+    </div>
+
+    <!-- 小票外部容器：应用缩放类 receipt-view -->
+    <div id="receipt-wrapper" class="receipt-view transition-transform duration-500 m-auto flex-none w-[320px] sm:w-[360px]" style="filter: drop-shadow(0 25px 25px rgba(0,0,0,0.8));">
+        
+        <!-- 小票主体区域 (截图的真正对象) -->
+        <div id="receipt-capture-area" class="w-full flex flex-col bg-transparent">
+            
+            <!-- 顶部 CSS 纯净锯齿 -->
+            <div class="receipt-edge-top"></div>
+
+            <!-- 小票内部内容区 -->
+            <div id="receipt-main-body" class="px-6 py-4 flex flex-col font-receipt text-[#000000] relative">
+                
+                <div class="receipt-content flex flex-col w-full relative z-10">
+                    <!-- 顶部大标题 -->
+                    <div class="text-center mb-4">
+                        <h1 contenteditable="true" class="text-5xl font-bold uppercase tracking-tighter leading-none mb-1">N STORE</h1>
+                        <div class="text-xs uppercase tracking-widest opacity-70">
+                            * * * * * Receipt * * * * *
+                        </div>
+                    </div>
+
+                    <!-- 基本信息块 -->
+                    <div class="text-sm opacity-80 leading-tight mb-2">
+                        <div class="flex justify-between">
+                            <span>Date:</span>
+                            <span contenteditable="true" id="current-date"></span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span>Terminal:</span>
+                            <span contenteditable="true">01-MAIN</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span>Served by:</span>
+                            <span contenteditable="true">Admin</span>
+                        </div>
+                    </div>
+
+                    <div class="receipt-divider"></div>
+
+                    <!-- 图像处理区域 -->
+                    <div class="relative w-full aspect-[4/3] my-4 bg-black/5 flex items-center justify-center overflow-hidden group img-container cursor-pointer" onclick="document.getElementById('image-upload').click()">
+                        <input type="file" id="image-upload" accept="image/*" class="hidden">
+                        
+                        <div id="upload-placeholder" class="text-center opacity-40 flex flex-col items-center">
+                            <svg class="w-8 h-8 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                            <span class="text-sm">Click to upload image</span>
+                        </div>
+
+                        <!-- 图像展示 Canvas -->
+                        <canvas id="dither-canvas" class="absolute inset-0 w-full h-full object-cover opacity-100 hidden" style="image-rendering: pixelated;"></canvas>
+                        
+                        <div id="upload-overlay" class="absolute inset-0 bg-black/70 text-white flex items-center justify-center opacity-0 text-sm tracking-widest uppercase transition-opacity backdrop-blur-sm z-20">
+                            Change Image
+                        </div>
+                    </div>
+
+                    <div class="text-[10px] text-center opacity-60 uppercase tracking-widest mb-2 leading-none">
+                        [ Lo-Fi Dithered Print ]
+                    </div>
+
+                    <div class="receipt-divider"></div>
+
+                    <div id="item-list-container" class="flex flex-col gap-2 text-base my-2">
+                        <div class="flex justify-between items-end relative group item-row">
+                            <button class="delete-btn absolute -left-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer" title="Remove Item" onclick="removeItem(this)">×</button>
+                            <span contenteditable="true" class="flex-1 pr-2 uppercase">Custom Sticker Set</span>
+                            <span contenteditable="true">01</span>
+                        </div>
+                        <div class="flex justify-between items-end relative group item-row">
+                            <button class="delete-btn absolute -left-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer" title="Remove Item" onclick="removeItem(this)">×</button>
+                            <span contenteditable="true" class="flex-1 pr-2 uppercase">Artbook Vol.2</span>
+                            <span contenteditable="true">02</span>
+                        </div>
+                        <div class="flex justify-between items-end relative group item-row">
+                            <button class="delete-btn absolute -left-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer" title="Remove Item" onclick="removeItem(this)">×</button>
+                            <span contenteditable="true" class="flex-1 pr-2 uppercase">Coffee Bean 250g</span>
+                            <span contenteditable="true">01</span>
+                        </div>
+                    </div>
+                    
+                    <div class="text-center mt-1">
+                        <button id="add-item-btn" class="text-[10px] opacity-40 hover:opacity-100 transition-opacity uppercase tracking-widest cursor-pointer inline-block py-1">
+                            + Add Item
+                        </button>
+                    </div>
+
+                    <div class="receipt-divider"></div>
+
+                    <div class="flex justify-between items-end text-xl my-1">
+                        <span>TOTAL:</span>
+                        <span contenteditable="true">¥ 158.00</span>
+                    </div>
+
+                    <div class="receipt-divider"></div>
+
+                    <!-- 底部条形码 -->
+                    <div class="mt-4 flex flex-col items-center">
+                        <div class="w-full h-12 flex items-stretch justify-center opacity-90 gap-[2px]" id="barcode-container"></div>
+                        <div class="text-xs tracking-[0.3em] mt-1">1092837465912</div>
+                    </div>
+
+                    <div class="mt-6 text-center text-sm opacity-80 uppercase leading-tight tracking-wider">
+                        <p>T H A N K &nbsp;&nbsp;Y O U</p>
+                        <p>H A V E &nbsp;A &nbsp;N I C E &nbsp;D A Y</p>
+                    </div>
+                    
+                    <div class="mt-4 text-[10px] text-center opacity-40">
+                        Retain this copy for your records.
+                    </div>
+                </div> 
+            </div>
+            
+            <!-- 底部 CSS 纯净锯齿 -->
+            <div class="receipt-edge-bottom"></div>
+
+        </div>
+    </div>
+
+    <script>
+        // --- 基础初始化 ---
+        const now = new Date();
+        const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+        document.getElementById('current-date').innerText = dateStr;
+
+        const barcodeContainer = document.getElementById('barcode-container');
+        const pattern = [2, 1, 4, 1, 1, 3, 2, 2, 1, 4, 2, 1, 1, 1, 3, 2, 1, 4, 1, 2, 2, 1, 1];
+        pattern.forEach(width => {
+            const bar = document.createElement('div');
+            bar.className = 'bg-[#000000]';
+            bar.style.width = `${width * 2}px`;
+            barcodeContainer.appendChild(bar);
+        });
+
+        // Toast 提示封装
+        const toastEl = document.getElementById('toast');
+        const toastMsg = document.getElementById('toast-msg');
+        let toastTimeout;
+        function showToast(msg, isError = false) {
+            toastMsg.innerText = msg;
+            toastEl.className = `fixed top-6 left-1/2 -translate-x-1/2 z-[200] px-6 py-3 rounded text-sm tracking-widest font-bold uppercase transition-all duration-300 text-white shadow-xl flex items-center gap-2 ${isError ? 'bg-red-600' : 'bg-black/90'}`;
+            toastEl.style.opacity = '1';
+            toastEl.style.transform = 'translate(-50%, 0)';
+            
+            clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(() => {
+                toastEl.style.opacity = '0';
+                toastEl.style.transform = 'translate(-50%, -20px)';
+            }, 3000);
+        }
+
+        // 设备检测
+        const checkIsMobile = () => {
+            return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
+        };
+
+        // --- 颜色切换逻辑 (直接修改 CSS 变量，安全无毒) ---
+        const colorBtns = document.querySelectorAll('.color-btn');
+        function updateReceiptColor(hexColor) {
+            document.documentElement.style.setProperty('--receipt-bg', hexColor);
+        }
+        
+        colorBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                colorBtns.forEach(b => b.classList.replace('border-white', 'border-zinc-500'));
+                e.target.classList.replace('border-zinc-500', 'border-white');
+                updateReceiptColor(e.target.getAttribute('data-color'));
+            });
+        });
+
+        // --- 商品行动态增删 ---
+        const itemListContainer = document.getElementById('item-list-container');
+        document.getElementById('add-item-btn').addEventListener('click', () => {
+            const newRow = document.createElement('div');
+            newRow.className = 'flex justify-between items-end relative group item-row';
+            newRow.innerHTML = `
+                <button class="delete-btn absolute -left-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer" title="Remove Item" onclick="removeItem(this)">×</button>
+                <span contenteditable="true" class="flex-1 pr-2 uppercase">New Item</span>
+                <span contenteditable="true">01</span>
+            `;
+            itemListContainer.appendChild(newRow);
+        });
+
+        window.removeItem = function(btn) {
+            const allRows = itemListContainer.querySelectorAll('.item-row');
+            if (allRows.length > 1) {
+                btn.closest('.item-row').remove();
+            } else {
+                const row = btn.closest('.item-row');
+                row.classList.add('animate-pulse');
+                setTimeout(() => row.classList.remove('animate-pulse'), 500);
+            }
+        };
+
+        // --- 图片处理 (Floyd-Steinberg 像素抖动) ---
+        const imageUpload = document.getElementById('image-upload');
+        const canvas = document.getElementById('dither-canvas');
+        const ctx = canvas.getContext('2d');
+        const placeholder = document.getElementById('upload-placeholder');
+        const imgContainer = document.querySelector('.img-container');
+
+        imageUpload.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    canvas.classList.remove('hidden');
+                    placeholder.classList.add('hidden');
+
+                    const containerWidth = imgContainer.clientWidth;
+                    const containerHeight = imgContainer.clientHeight;
+                    
+                    const targetWidth = 800; 
+                    const targetHeight = targetWidth * (containerHeight / containerWidth);
+                    
+                    canvas.width = targetWidth;
+                    canvas.height = targetHeight;
+
+                    const imgRatio = img.width / img.height;
+                    const canvasRatio = canvas.width / canvas.height;
+                    let drawWidth = canvas.width, drawHeight = canvas.height;
+                    let offsetX = 0, offsetY = 0;
+
+                    if (imgRatio > canvasRatio) {
+                        drawWidth = canvas.height * imgRatio;
+                        offsetX = (canvas.width - drawWidth) / 2;
+                    } else {
+                        drawHeight = canvas.width / imgRatio;
+                        offsetY = (canvas.height - drawHeight) / 2;
+                    }
+
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+                    
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const pixels = imageData.data;
+
+                    for (let i = 0; i < pixels.length; i += 4) {
+                        let gray = pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114;
+                        pixels[i] = pixels[i + 1] = pixels[i + 2] = gray;
+                    }
+
+                    const w = canvas.width, h = canvas.height;
+                    const getIndex = (x, y) => (y * w + x) * 4;
+
+                    for (let y = 0; y < h; y++) {
+                        for (let x = 0; x < w; x++) {
+                            const idx = getIndex(x, y);
+                            const oldPixel = pixels[idx];
+                            const newPixel = oldPixel < 128 ? 0 : 255; 
+                            
+                            pixels[idx] = pixels[idx + 1] = pixels[idx + 2] = newPixel;
+                            const quantError = oldPixel - newPixel;
+
+                            if (x + 1 < w) pixels[getIndex(x + 1, y)] += quantError * (7 / 16);
+                            if (x - 1 >= 0 && y + 1 < h) pixels[getIndex(x - 1, y + 1)] += quantError * (3 / 16);
+                            if (y + 1 < h) pixels[getIndex(x, y + 1)] += quantError * (5 / 16);
+                            if (x + 1 < w && y + 1 < h) pixels[getIndex(x + 1, y + 1)] += quantError * (1 / 16);
+                        }
+                    }
+
+                    for(let i=0; i<pixels.length; i+=4) {
+                        if(pixels[i] > 128) pixels[i+3] = 0; 
+                        else { pixels[i]=0; pixels[i+1]=0; pixels[i+2]=0; pixels[i+3]=255; }
+                    }
+                    ctx.putImageData(imageData, 0, 0);
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        const exportBtn = document.getElementById('export-btn');
+        const wrapper = document.getElementById('receipt-wrapper');
+        const captureArea = document.getElementById('receipt-capture-area');
+        
+        // Modal 控制
+        const exportModal = document.getElementById('export-modal');
+        const exportImage = document.getElementById('export-image');
+        document.getElementById('close-modal-btn').addEventListener('click', () => {
+            exportModal.classList.add('hidden');
+            exportModal.classList.remove('flex');
+            URL.revokeObjectURL(exportImage.src);
+        });
+
+        exportBtn.addEventListener('click', () => {
+            const originalTransform = wrapper.style.transform;
+            
+            // 关闭动画并移除缩放，保证无干扰的高清截图
+            wrapper.style.transition = 'none';
+            wrapper.classList.remove('receipt-view');
+            wrapper.style.transform = 'none';
+            
+            // 确保截图时的父级底色完全透明，防止边缘像素溢出污染
+            const originalBodyBg = document.body.style.backgroundColor;
+            const originalHtmlBg = document.documentElement.style.backgroundColor;
+            document.documentElement.style.backgroundColor = 'transparent';
+            document.body.style.backgroundColor = 'transparent';
+
+            const originalText = exportBtn.innerHTML;
+            exportBtn.innerHTML = '<span class="animate-pulse">Processing...</span>';
+
+            const outputScale = checkIsMobile() ? 2 : 3;
+
+            setTimeout(() => {
+                html2canvas(captureArea, {
+                    backgroundColor: null,
+                    scale: outputScale, 
+                    useCORS: true,
+                    logging: false,
+                    onclone: function (clonedDoc) {
+                        const clonedDeleteBtns = clonedDoc.querySelectorAll('.delete-btn');
+                        clonedDeleteBtns.forEach(btn => btn.style.display = 'none');
+                        
+                        const clonedAddBtn = clonedDoc.getElementById('add-item-btn');
+                        if (clonedAddBtn) clonedAddBtn.style.display = 'none';
+                        
+                        // 【绝杀修复】：直接将顶部和底部的锯齿元素替换为实心色块！
+                        // 阻止 html2canvas 渲染 CSS radial-gradient（这是导致边缘没切干净、出现黑点的唯一元凶）
+                        const edgeTop = clonedDoc.querySelector('.receipt-edge-top');
+                        const edgeBottom = clonedDoc.querySelector('.receipt-edge-bottom');
+                        const originalBody = clonedDoc.getElementById('receipt-main-body');
+                        
+                        // 获取当前正在使用的背景颜色 (因为使用 CSS 变量，可以直接从实际节点读取，或者默认 #80c689)
+                        const realBodyNode = document.getElementById('receipt-main-body');
+                        const bgColor = window.getComputedStyle(realBodyNode).backgroundColor || '#80c689';
+                        
+                        if (edgeTop) {
+                            edgeTop.style.backgroundImage = 'none';
+                            edgeTop.style.backgroundColor = bgColor;
+                        }
+                        if (edgeBottom) {
+                            edgeBottom.style.backgroundImage = 'none';
+                            edgeBottom.style.backgroundColor = bgColor;
+                        }
+
+                        // 移除 wrapper 的 drop-shadow，防止阴影渗入透明像素
+                        const wrapperNode = clonedDoc.getElementById('receipt-wrapper');
+                        if (wrapperNode) {
+                            wrapperNode.style.filter = 'none';
+                            wrapperNode.style.boxShadow = 'none';
+                        }
+                        
+                        if (originalBody) {
+                             originalBody.style.backgroundColor = bgColor;
+                        }
+                    }
+                }).then(resultCanvas => {
+                    // 恢复页面背景色
+                    document.documentElement.style.backgroundColor = originalHtmlBg;
+                    document.body.style.backgroundColor = originalBodyBg;
+
+                    // 【绝杀修复 2】：利用原生 Canvas 2D 极其精准的数学计算，在导出的实心长方形画布上“物理打孔”
+                    // 这比浏览器的 CSS 截图渲染要完美一万倍，绝对不会有任何毛边或黑点！
+                    const ctx = resultCanvas.getContext('2d');
+                    const actualScale = resultCanvas.width / captureArea.offsetWidth;
+                    
+                    const holeRadius = 6 * actualScale;
+                    const holeDiameter = 12 * actualScale;
+                    
+                    ctx.globalCompositeOperation = 'destination-out';
+                    ctx.fillStyle = '#000'; // 颜色任意，因为是 destination-out (橡皮擦模式)
+                    
+                    // 在顶部边缘精确打孔
+                    for (let x = holeRadius; x <= resultCanvas.width + holeDiameter; x += holeDiameter) {
+                        ctx.beginPath();
+                        ctx.arc(x, 0, holeRadius, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                    
+                    // 在底部边缘精确打孔
+                    for (let x = holeRadius; x <= resultCanvas.width + holeDiameter; x += holeDiameter) {
+                        ctx.beginPath();
+                        ctx.arc(x, resultCanvas.height, holeRadius, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                    
+                    ctx.globalCompositeOperation = 'source-over'; // 恢复默认混合模式
+                    
+                    // 封装触发结果的函数
+                    const triggerExport = (finalCnv) => {
+                        exportImage.src = finalCnv.toDataURL('image/png');
+                        exportModal.classList.remove('hidden');
+                        exportModal.classList.add('flex');
+                        
+                        // 恢复 UI 与缩放状态
+                        wrapper.classList.add('receipt-view');
+                        wrapper.style.transform = originalTransform || ''; 
+                        setTimeout(() => wrapper.style.transition = '', 50);
+                        exportBtn.innerHTML = originalText;
+                    };
+                    
+                    // 现在的 resultCanvas 已经是一个数学级别完美的圆孔锯齿小票，开始纹理合成...
+                    const textureImg = new Image();
+                    textureImg.crossOrigin = "Anonymous";
+                    
+                    textureImg.onload = () => {
+                        try {
+                            const finalCanvas = document.createElement('canvas');
+                            finalCanvas.width = resultCanvas.width;
+                            finalCanvas.height = resultCanvas.height;
+                            const finalCtx = finalCanvas.getContext('2d');
+                            
+                            // 1. 先把完美的打孔底板画上去
+                            finalCtx.drawImage(resultCanvas, 0, 0);
+                            
+                            // 2. 准备纹理裁剪画布
+                            const texCanvas = document.createElement('canvas');
+                            texCanvas.width = resultCanvas.width;
+                            texCanvas.height = resultCanvas.height;
+                            const texCtx = texCanvas.getContext('2d');
+                            
+                            // 模拟 background-size: cover
+                            const imgRatio = textureImg.width / textureImg.height;
+                            const canvasRatio = texCanvas.width / texCanvas.height;
+                            let drawW = texCanvas.width, drawH = texCanvas.height, drawX = 0, drawY = 0;
+                            
+                            if (imgRatio > canvasRatio) {
+                                drawH = texCanvas.height;
+                                drawW = textureImg.width * (texCanvas.height / textureImg.height);
+                                drawX = (texCanvas.width - drawW) / 2;
+                            } else {
+                                drawW = texCanvas.width;
+                                drawH = textureImg.height * (texCanvas.width / textureImg.width);
+                                drawY = (texCanvas.height - drawH) / 2;
+                            }
+                            
+                            // 将纹理画入
+                            texCtx.drawImage(textureImg, drawX, drawY, drawW, drawH);
+                            
+                            // 【核心魔法：使用 destination-in，根据小票的透明锯齿轮廓，完美裁剪纹理，绝对不会越界！】
+                            texCtx.globalCompositeOperation = 'destination-in';
+                            texCtx.drawImage(resultCanvas, 0, 0);
+                            
+                            // 3. 把裁切好的纹理，用正片叠底的方式印刻到纯净小票上
+                            finalCtx.globalCompositeOperation = 'multiply';
+                            finalCtx.globalAlpha = 0.65; 
+                            finalCtx.drawImage(texCanvas, 0, 0);
+                            
+                            triggerExport(finalCanvas);
+                        } catch (e) {
+                            console.warn("纹理合成受阻(安全限制)，自动降级输出纯版图：", e);
+                            triggerExport(resultCanvas);
+                        }
+                    };
+
+                    textureImg.onerror = () => {
+                        console.warn("纹理网络加载失败，自动降级输出纯版图。");
+                        triggerExport(resultCanvas);
+                    };
+
+                    // 加载纸张底图
+                    textureImg.src = "9964cadffb3488eb67207c0556e8d189.jpg";
+
+                }).catch(err => {
+                    document.body.style.backgroundColor = originalBodyBg;
+                    console.error('Export Error:', err);
+                    wrapper.classList.add('receipt-view');
+                    wrapper.style.transform = originalTransform || ''; 
+                    setTimeout(() => wrapper.style.transition = '', 50);
+                    exportBtn.innerHTML = originalText;
+                    showToast("System error, please try again", true);
+                });
+            }, 100); 
+        });
+    </script>
+</body>
+</html>
