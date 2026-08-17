@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retro Receipt Generator - N STORE</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=VT323&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    
+    <style>
+        body {
+            background-color: #050505;
+            color: #000;
+            font-family: 'Space Mono', monospace;
+            overflow-x: hidden;
+        }
+
+        .font-receipt {
+            font-family: 'VT323', monospace;
+        }
+
+        ::-webkit-scrollbar {
+            width: 0px;
+            background: transparent;
+        }
+
+        .receipt-view {
+            transform: rotate(-2.5deg) scale(0.75);
+            transform-origin: center center;
+        }
+        .receipt-view:hover {
+            transform: rotate(0deg) scale(0.78);
+        }
+        @media (max-width: 640px) {
+            .receipt-view {
+                transform: rotate(-2.5deg) scale(0.65);
+            }
+            .receipt-view:hover {
+                transform: rotate(0deg) scale(0.68);
+            }
+        }
+
+        .receipt-content {
+            position: relative;
+            z-index: 10;
+        }
+
+        [contenteditable="true"] {
+            outline: none;
+            transition: background-color 0.2s;
+        }
+        [contenteditable="true"]:hover {
+            background-color: rgba(0,0,0,0.05);
+            cursor: text;
+        }
+        [contenteditable="true"]:focus {
+            background-color: rgba(0,0,0,0.1);
+        }
+
+        .receipt-divider {
+            border-top: 1px dashed #111;
+            margin: 12px 0;
+            opacity: 0.8;
+        }
+
+        #upload-overlay {
+            transition: opacity 0.3s ease;
+        }
+        .img-container:hover #upload-overlay {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center relative py-12 overflow-x-hidden">
+
+    <!-- 顶部错误提示 Toast -->
+    <div id="toast-notification" class="fixed top-8 left-1/2 -translate-x-1/2 bg-red-600 text-white px-6 py-3 rounded shadow-2xl z-[150] transition-opacity duration-300 opacity-0 pointer-events-none flex items-center gap-2">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        <span id="toast-message" class="text-sm tracking-wide">Error</span>
+    </div>
+
+    <div class="fixed top-6 right-6 border border-zinc-700 bg-black/80 backdrop-blur-sm p-4 z-50 flex flex-col items-start gap-3">
+        <span class="text-zinc-400 text-xs tracking-widest uppercase">Color</span>
+        <div class="flex gap-2" id="color-picker">
+            <button class="w-6 h-6 border border-zinc-500 hover:border-white transition-colors color-btn" data-color="#f4f4f5" style="background-color: #f4f4f5;" title="Classic White"></button>
+            <button class="w-6 h-6 border border-zinc-500 hover:border-white transition-colors color-btn" data-color="#f0e6d2" style="background-color: #f0e6d2;" title="Faded Yellow"></button>
+            <button class="w-6 h-6 border border-zinc-500 hover:border-white transition-colors color-btn" data-color="#f0d5d9" style="background-color: #f0d5d9;" title="Light Pink"></button>
+            <button class="w-6 h-6 border border-white transition-colors color-btn" data-color="#80c689" style="background-color: #80c689;" title="Retro Green"></button>
+            <button class="w-6 h-6 border border-zinc-500 hover:border-white transition-colors color-btn" data-color="#bba7d4" style="background-color: #bba7d4;" title="Faded Purple"></button>
+        </div>
+    </div>
+
+    <button id="export-btn" class="fixed bottom-6 right-6 border border-zinc-700 bg-white text-black px-6 py-2 text-sm tracking-widest uppercase hover:bg-zinc-200 transition-all z-50 group flex items-center gap-2 cursor-pointer shadow-[0_0_20px_rgba(255,255,255,0.2)]">
+        <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+        <span>Save</span>
+    </button>
+
+    <!-- 手机端长按保存弹窗 -->
+    <div id="export-modal" class="fixed inset-0 bg-black/95 z-[100] hidden flex-col items-center justify-center p-4 opacity-0 transition-opacity duration-300">
+        <div class="text-white/80 text-xs sm:text-sm mb-6 tracking-widest uppercase animate-pulse text-center">
+            [ 长按下方图片保存至相册 ]<br/><span class="text-[10px] opacity-70">Long press image to save</span>
+        </div>
+        <!-- 使用 touch-action: none 保障长按手势不会被意外滑动打断 -->
+        <img id="export-image" class="max-h-[75vh] w-auto max-w-full shadow-[0_0_50px_rgba(255,255,255,0.1)] rounded-sm pointer-events-auto select-none" style="-webkit-touch-callout: default; pointer-events: auto;" src="" alt="Generated Receipt">
+        <button id="close-modal-btn" class="mt-8 border border-zinc-600 px-8 py-3 text-zinc-300 text-xs uppercase tracking-widest hover:bg-white hover:text-black transition-colors cursor-pointer">
+            Close / 返回
+        </button>
+    </div>
+
+    <div id="receipt-wrapper" class="receipt-view transition-transform duration-500 m-auto flex-none w-[320px] sm:w-[360px]" style="filter: drop-shadow(0 25px 25px rgba(0,0,0,0.8));">
+        <div id="receipt-capture-area" class="w-full flex flex-col bg-transparent">
+            
+            <div id="edge-top" class="w-full h-[8px] bg-repeat-x transition-colors duration-300"></div>
+
+            <div id="receipt-main-body" class="px-6 py-4 flex flex-col font-receipt text-[#000000] transition-colors duration-300 relative" style="background-color: #80c689;">
+                
+                <!-- 真正的纸张褶皱图，稍后将在截图引擎抓取前通过 ignoreElements 完美隐身 -->
+                <div id="texture-overlay" class="absolute inset-0 pointer-events-none z-0" style="background-image: url('9964cadffb3488eb67207c0556e8d189.jpg'); background-size: cover; background-position: center; mix-blend-mode: multiply; opacity: 0.65;"></div>
+
+                <div class="receipt-content flex flex-col w-full relative z-10">
+                    <div class="text-center mb-4">
+                        <h1 contenteditable="true" class="text-5xl font-bold uppercase tracking-tighter leading-none mb-1">N STORE</h1>
+                        <div class="text-xs uppercase tracking-widest opacity-70">
+                            * * * * * Receipt * * * * *
+                        </div>
+                    </div>
+
+                    <div class="text-sm opacity-80 leading-tight mb-2">
+                        <div class="flex justify-between">
+                            <span>Date:</span>
+                            <span contenteditable="true" id="current-date"></span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span>Terminal:</span>
+                            <span contenteditable="true">01-MAIN</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span>Served by:</span>
+                            <span contenteditable="true">Admin</span>
+                        </div>
+                    </div>
+
+                    <div class="receipt-divider"></div>
+
+                    <div class="relative w-full aspect-[4/3] my-4 bg-black/5 flex items-center justify-center overflow-hidden group img-container cursor-pointer" onclick="document.getElementById('image-upload').click()">
+                        <input type="file" id="image-upload" accept="image/*" class="hidden">
+                        
+                        <div id="upload-placeholder" class="text-center opacity-40 flex flex-col items-center">
+                            <svg class="w-8 h-8 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                            <span class="text-sm">Click to upload image</span>
+                        </div>
+
+                        <canvas id="dither-canvas" class="absolute inset-0 w-full h-full object-cover opacity-100 hidden" style="image-rendering: pixelated;"></canvas>
+                        
+                        <div id="upload-overlay" class="absolute inset-0 bg-black/70 text-white flex items-center justify-center opacity-0 text-sm tracking-widest uppercase transition-opacity backdrop-blur-sm z-20">
+                            Change Image
+                        </div>
+                    </div>
+
+                    <div class="text-[10px] text-center opacity-60 uppercase tracking-widest mb-2 leading-none">
+                        [ Lo-Fi Dithered Print ]
+                    </div>
+
+                    <div class="receipt-divider"></div>
+
+                    <div id="item-list-container" class="flex flex-col gap-2 text-base my-2">
+                        <div class="flex justify-between items-end relative group item-row">
+                            <button class="delete-btn absolute -left-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer" title="Remove Item" onclick="removeItem(this)">×</button>
+                            <span contenteditable="true" class="flex-1 pr-2 uppercase">Custom Sticker Set</span>
+                            <span contenteditable="true">01</span>
+                        </div>
+                        <div class="flex justify-between items-end relative group item-row">
+                            <button class="delete-btn absolute -left-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer" title="Remove Item" onclick="removeItem(this)">×</button>
+                            <span contenteditable="true" class="flex-1 pr-2 uppercase">Artbook Vol.2</span>
+                            <span contenteditable="true">02</span>
+                        </div>
+                        <div class="flex justify-between items-end relative group item-row">
+                            <button class="delete-btn absolute -left-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer" title="Remove Item" onclick="removeItem(this)">×</button>
+                            <span contenteditable="true" class="flex-1 pr-2 uppercase">Coffee Bean 250g</span>
+                            <span contenteditable="true">01</span>
+                        </div>
+                    </div>
+                    
+                    <div class="text-center mt-1">
+                        <button id="add-item-btn" class="text-[10px] opacity-40 hover:opacity-100 transition-opacity uppercase tracking-widest cursor-pointer inline-block py-1">
+                            + Add Item
+                        </button>
+                    </div>
+
+                    <div class="receipt-divider"></div>
+
+                    <div class="flex justify-between items-end text-xl my-1">
+                        <span>TOTAL:</span>
+                        <span contenteditable="true">¥ 158.00</span>
+                    </div>
+
+                    <div class="receipt-divider"></div>
+
+                    <div class="mt-4 flex flex-col items-center">
+                        <div class="w-full h-12 flex items-stretch justify-center opacity-90 gap-[2px]" id="barcode-container"></div>
+                        <div class="text-xs tracking-[0.3em] mt-1">
+                            1092837465912
+                        </div>
+                    </div>
+
+                    <div class="mt-6 text-center text-sm opacity-80 uppercase leading-tight tracking-wider">
+                        <p>T H A N K &nbsp;&nbsp;Y O U</p>
+                        <p>H A V E &nbsp;A &nbsp;N I C E &nbsp;D A Y</p>
+                    </div>
+                    
+                    <div class="mt-4 text-[10px] text-center opacity-40">
+                        Retain this copy for your records.
+                    </div>
+                </div> 
+            </div>
+            
+            <div id="edge-bottom" class="w-full h-[8px] bg-repeat-x transition-colors duration-300"></div>
+        </div>
+    </div>
+
+    <script>
+        let toastTimeout;
+        function showToast(message) {
+            const toast = document.getElementById('toast-notification');
+            const msgSpan = document.getElementById('toast-message');
+            msgSpan.innerText = message;
+            toast.classList.remove('opacity-0');
+            clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(() => toast.classList.add('opacity-0'), 3500);
+        }
+
+        const now = new Date();
+        const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+        document.getElementById('current-date').innerText = dateStr;
+
+        const barcodeContainer = document.getElementById('barcode-container');
+        const pattern = [2, 1, 4, 1, 1, 3, 2, 2, 1, 4, 2, 1, 1, 1, 3, 2, 1, 4, 1, 2, 2, 1, 1];
+        pattern.forEach(width => {
+            const bar = document.createElement('div');
+            bar.className = 'bg-[#000000]';
+            bar.style.width = `${width * 2}px`;
+            barcodeContainer.appendChild(bar);
+        });
+
+        const colorBtns = document.querySelectorAll('.color-btn');
+        const receiptMainBody = document.getElementById('receipt-main-body');
+        const edgeTop = document.getElementById('edge-top');
+        const edgeBottom = document.getElementById('edge-bottom');
+
+        function updateReceiptColor(hexColor) {
+            receiptMainBody.style.backgroundColor = hexColor;
+            const topSvg = `<svg width="8" height="8" xmlns="http://www.w3.org/2000/svg"><path d="M 0,8 L 0,0 A 4,4 0 0 0 8,0 L 8,8 Z" fill="${hexColor}"/></svg>`;
+            const bottomSvg = `<svg width="8" height="8" xmlns="http://www.w3.org/2000/svg"><path d="M 0,0 L 8,0 L 8,8 A 4,4 0 0 0 0,8 Z" fill="${hexColor}"/></svg>`;
+            edgeTop.style.backgroundImage = `url('data:image/svg+xml,${encodeURIComponent(topSvg)}')`;
+            edgeBottom.style.backgroundImage = `url('data:image/svg+xml,${encodeURIComponent(bottomSvg)}')`;
+        }
+
+        updateReceiptColor('#80c689');
+
+        colorBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                colorBtns.forEach(b => b.classList.replace('border-white', 'border-zinc-500'));
+                e.target.classList.replace('border-zinc-500', 'border-white');
+                updateReceiptColor(e.target.getAttribute('data-color'));
+            });
+        });
+
+        const itemListContainer = document.getElementById('item-list-container');
+        document.getElementById('add-item-btn').addEventListener('click', () => {
+            const newRow = document.createElement('div');
+            newRow.className = 'flex justify-between items-end relative group item-row';
+            newRow.innerHTML = `
+                <button class="delete-btn absolute -left-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer" title="Remove Item" onclick="removeItem(this)">×</button>
+                <span contenteditable="true" class="flex-1 pr-2 uppercase">New Item</span>
+                <span contenteditable="true">01</span>
+            `;
+            itemListContainer.appendChild(newRow);
+        });
+
+        window.removeItem = function(btn) {
+            const allRows = itemListContainer.querySelectorAll('.item-row');
+            if (allRows.length > 1) {
+                btn.closest('.item-row').remove();
+            } else {
+                const row = btn.closest('.item-row');
+                row.classList.add('animate-pulse');
+                setTimeout(() => row.classList.remove('animate-pulse'), 500);
+            }
+        };
+
+        const imageUpload = document.getElementById('image-upload');
+        const ditherCanvas = document.getElementById('dither-canvas');
+        const ctx = ditherCanvas.getContext('2d');
+        const placeholder = document.getElementById('upload-placeholder');
+        const imgContainer = document.querySelector('.img-container');
+
+        imageUpload.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    ditherCanvas.classList.remove('hidden');
+                    placeholder.classList.add('hidden');
+
+                    const containerWidth = imgContainer.clientWidth;
+                    const containerHeight = imgContainer.clientHeight;
+                    const targetWidth = 800; 
+                    const targetHeight = targetWidth * (containerHeight / containerWidth);
+                    
+                    ditherCanvas.width = targetWidth;
+                    ditherCanvas.height = targetHeight;
+
+                    const imgRatio = img.width / img.height;
+                    const canvasRatio = ditherCanvas.width / ditherCanvas.height;
+                    
+                    let drawWidth = ditherCanvas.width;
+                    let drawHeight = ditherCanvas.height;
+                    let offsetX = 0;
+                    let offsetY = 0;
+
+                    if (imgRatio > canvasRatio) {
+                        drawWidth = ditherCanvas.height * imgRatio;
+                        offsetX = (ditherCanvas.width - drawWidth) / 2;
+                    } else {
+                        drawHeight = ditherCanvas.width / imgRatio;
+                        offsetY = (ditherCanvas.height - drawHeight) / 2;
+                    }
+
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, ditherCanvas.width, ditherCanvas.height);
+                    ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+                    
+                    const imageData = ctx.getImageData(0, 0, ditherCanvas.width, ditherCanvas.height);
+                    const pixels = imageData.data;
+
+                    for (let i = 0; i < pixels.length; i += 4) {
+                        let gray = pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114;
+                        pixels[i] = pixels[i + 1] = pixels[i + 2] = gray;
+                    }
+
+                    const w = ditherCanvas.width;
+                    const h = ditherCanvas.height;
+                    const getIndex = (x, y) => (y * w + x) * 4;
+
+                    for (let y = 0; y < h; y++) {
+                        for (let x = 0; x < w; x++) {
+                            const idx = getIndex(x, y);
+                            const oldPixel = pixels[idx];
+                            const newPixel = oldPixel < 128 ? 0 : 255; 
+                            
+                            pixels[idx] = pixels[idx + 1] = pixels[idx + 2] = newPixel;
+                            const quantError = oldPixel - newPixel;
+
+                            if (x + 1 < w) pixels[getIndex(x + 1, y)] += quantError * (7 / 16);
+                            if (x - 1 >= 0 && y + 1 < h) pixels[getIndex(x - 1, y + 1)] += quantError * (3 / 16);
+                            if (y + 1 < h) pixels[getIndex(x, y + 1)] += quantError * (5 / 16);
+                            if (x + 1 < w && y + 1 < h) pixels[getIndex(x + 1, y + 1)] += quantError * (1 / 16);
+                        }
+                    }
+
+                    for(let i=0; i<pixels.length; i+=4) {
+                        if(pixels[i] > 128) { 
+                            pixels[i+3] = 0; 
+                        } else {
+                            pixels[i] = 0;
+                            pixels[i+1] = 0;
+                            pixels[i+2] = 0;
+                            pixels[i+3] = 255;
+                        }
+                    }
+                    
+                    ctx.putImageData(imageData, 0, 0);
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        const exportBtn = document.getElementById('export-btn');
+        const wrapper = document.getElementById('receipt-wrapper');
+        const captureArea = document.getElementById('receipt-capture-area');
+        const exportModal = document.getElementById('export-modal');
+        const exportImage = document.getElementById('export-image');
+        
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+        document.getElementById('close-modal-btn').addEventListener('click', () => {
+            exportModal.classList.remove('opacity-100');
+            setTimeout(() => {
+                exportModal.classList.remove('flex');
+                exportModal.classList.add('hidden');
+                if (exportImage.src.startsWith('blob:')) URL.revokeObjectURL(exportImage.src);
+                exportImage.src = ''; 
+            }, 300);
+        });
+
+        exportBtn.addEventListener('click', () => {
+            const originalTransform = wrapper.style.transform;
+            wrapper.style.transition = 'none';
+            wrapper.classList.remove('receipt-view');
+            wrapper.style.transform = 'none';
+            
+            const originalText = exportBtn.innerHTML;
+            exportBtn.innerHTML = '<span class="animate-pulse flex items-center gap-2"><svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>Working...</span>';
+
+            setTimeout(() => {
+                // 【核心修复一】使用 ignoreElements 彻底从源头截断纹理图，确保底层 canvas 百分之百纯净免受污染！
+                html2canvas(captureArea, {
+                    backgroundColor: null,
+                    scale: isMobile ? 1.5 : 2, 
+                    useCORS: true,
+                    allowTaint: false,
+                    logging: false,
+                    ignoreElements: (node) => {
+                        if (node.id === 'texture-overlay') return true; 
+                        if (node.id === 'add-item-btn') return true;
+                        if (node.classList && node.classList.contains('delete-btn')) return true;
+                        return false;
+                    }
+                }).then(cleanCanvas => {
+                    
+                    const restoreUI = () => {
+                        wrapper.classList.add('receipt-view');
+                        wrapper.style.transform = originalTransform || ''; 
+                        setTimeout(() => wrapper.style.transition = '', 50);
+                        exportBtn.innerHTML = originalText;
+                    };
+
+                    const displayOrDownloadBlob = (blob) => {
+                        try {
+                            const blobUrl = URL.createObjectURL(blob);
+                            if (isMobile) {
+                                exportImage.onload = () => {
+                                    exportModal.classList.remove('hidden');
+                                    exportModal.classList.add('flex');
+                                    requestAnimationFrame(() => exportModal.classList.add('opacity-100'));
+                                };
+                                exportImage.src = blobUrl;
+                            } else {
+                                const link = document.createElement('a');
+                                link.download = `nstore_receipt_${Date.now()}.png`;
+                                link.href = blobUrl;
+                                link.click();
+                                setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+                            }
+                        } catch (err) {
+                            showToast("图片展示出错，请重试。");
+                        } finally {
+                            restoreUI();
+                        }
+                    };
+
+                    // 【核心修复二】由于源 canvas 是纯净的，这里的 fallbackToPureCanvas 将 100% 成功生成二进制图像
+                    const fallbackToPureCanvas = () => {
+                        try {
+                            cleanCanvas.toBlob((blob) => {
+                                if (blob) {
+                                    displayOrDownloadBlob(blob);
+                                } else {
+                                    showToast("手机内存严重不足，无法生成图片。");
+                                    restoreUI();
+                                }
+                            }, 'image/png');
+                        } catch (fallbackErr) {
+                            // 如果哪怕这一步也失败（极其罕见），把具体底层错误暴露出来
+                            showToast("致命内存错误: " + fallbackErr.message);
+                            restoreUI();
+                        }
+                    };
+
+                    // 尝试给纯净画布重新合成外部纹理图
+                    const textureImg = new Image();
+                    textureImg.crossOrigin = "Anonymous";
+                    
+                    textureImg.onload = () => {
+                        try {
+                            const finalCanvas = document.createElement('canvas');
+                            finalCanvas.width = cleanCanvas.width;
+                            finalCanvas.height = cleanCanvas.height;
+                            const ctx = finalCanvas.getContext('2d');
+                            
+                            ctx.drawImage(cleanCanvas, 0, 0);
+                            
+                            const texCanvas = document.createElement('canvas');
+                            texCanvas.width = cleanCanvas.width;
+                            texCanvas.height = cleanCanvas.height;
+                            const texCtx = texCanvas.getContext('2d');
+                            
+                            const imgRatio = textureImg.width / textureImg.height;
+                            const canvasRatio = texCanvas.width / texCanvas.height;
+                            let drawW = texCanvas.width, drawH = texCanvas.height, drawX = 0, drawY = 0;
+                            
+                            if (imgRatio > canvasRatio) {
+                                drawH = texCanvas.height; drawW = textureImg.width * (texCanvas.height / textureImg.height);
+                                drawX = (texCanvas.width - drawW) / 2;
+                            } else {
+                                drawW = texCanvas.width; drawH = textureImg.height * (texCanvas.width / textureImg.width);
+                                drawY = (texCanvas.height - drawH) / 2;
+                            }
+                            texCtx.drawImage(textureImg, drawX, drawY, drawW, drawH);
+                            
+                            texCtx.globalCompositeOperation = 'destination-in';
+                            texCtx.drawImage(cleanCanvas, 0, 0);
+                            
+                            ctx.globalCompositeOperation = 'multiply';
+                            ctx.globalAlpha = 0.65;
+                            ctx.drawImage(texCanvas, 0, 0);
+                            
+                            // 关键点：如果 GitHub Pages 同源请求意外返回非跨域头，合成后会被判污染
+                            // 这里如果被判污染，.toBlob 就会立刻抛出 SecurityError 并走入 catch 进行优雅降级
+                            finalCanvas.toBlob((blob) => {
+                                if (blob) displayOrDownloadBlob(blob);
+                                else fallbackToPureCanvas();
+                            }, 'image/png');
+
+                        } catch (e) {
+                            console.warn("由于苹果安全限制，停止纹理合成，使用高清纯版底图降级。", e);
+                            fallbackToPureCanvas();
+                        }
+                    };
+
+                    textureImg.onerror = () => {
+                        console.warn("纹理加载失败，使用高清纯版底图降级。");
+                        fallbackToPureCanvas();
+                    };
+                    
+                    textureImg.src = "9964cadffb3488eb67207c0556e8d189.jpg";
+
+                }).catch(err => {
+                    console.error('Core render failed:', err);
+                    restoreUI();
+                    showToast("底层渲染引擎出错，请刷新重试。");
+                });
+            }, 100); 
+        });
+    </script>
+</body>
+</html>
