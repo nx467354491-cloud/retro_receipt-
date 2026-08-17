@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retro Receipt Generator - N STORE</title>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 html2canvas 用于导出图片 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <!-- 引入复古等宽字体与像素字体 -->
+    <link href="https://fonts.googleapis.com/css2?family=VT323&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    
+    <style>
+        body {
+            background-color: #050505;
+            color: #000;
+            font-family: 'Space Mono', monospace;
+            overflow-x: hidden;
+        }
+
+        .font-receipt {
+            font-family: 'VT323', monospace;
+        }
+
+        ::-webkit-scrollbar {
+            width: 0px;
+            background: transparent;
+        }
+
+        /* 控制小票初始画面的缩放与悬停动画 */
+        .receipt-view {
+            transform: rotate(-2.5deg) scale(0.75);
+            transform-origin: center center;
+        }
+        .receipt-view:hover {
+            transform: rotate(0deg) scale(0.78);
+        }
+        /* 针对手机等小屏幕进一步缩小以展示全貌 */
+        @media (max-width: 640px) {
+            .receipt-view {
+                transform: rotate(-2.5deg) scale(0.65);
+            }
+            .receipt-view:hover {
+                transform: rotate(0deg) scale(0.68);
+            }
+        }
+
+        /* 确保内容在纹理之上，保持绝对纯黑的锐利度 */
+        .receipt-content {
+            position: relative;
+            z-index: 10;
+        }
+
+        /* 隐藏输入框轮廓并添加交互反馈 */
+        [contenteditable="true"] {
+            outline: none;
+            transition: background-color 0.2s;
+        }
+        [contenteditable="true"]:hover {
+            background-color: rgba(0,0,0,0.05);
+            cursor: text;
+        }
+        [contenteditable="true"]:focus {
+            background-color: rgba(0,0,0,0.1);
+        }
+
+        .receipt-divider {
+            border-top: 1px dashed #111;
+            margin: 12px 0;
+            opacity: 0.8;
+        }
+
+        #upload-overlay {
+            transition: opacity 0.3s ease;
+        }
+        .img-container:hover #upload-overlay {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center relative py-12 overflow-x-hidden">
+
+    <!-- 顶部错误提示 Toast -->
+    <div id="toast-notification" class="fixed top-8 left-1/2 -translate-x-1/2 bg-red-600 text-white px-6 py-3 rounded shadow-2xl z-[150] transition-opacity duration-300 opacity-0 pointer-events-none flex items-center gap-2">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        <span id="toast-message" class="text-sm tracking-wide">Error</span>
+    </div>
+
+    <!-- 右上角：底色切换面板 -->
+    <div class="fixed top-6 right-6 border border-zinc-700 bg-black/80 backdrop-blur-sm p-4 z-50 flex flex-col items-start gap-3">
+        <span class="text-zinc-400 text-xs tracking-widest uppercase">Color</span>
+        <div class="flex gap-2" id="color-picker">
+            <button class="w-6 h-6 border border-zinc-500 hover:border-white transition-colors color-btn" data-color="#f4f4f5" style="background-color: #f4f4f5;" title="Classic White"></button>
+            <button class="w-6 h-6 border border-zinc-500 hover:border-white transition-colors color-btn" data-color="#f0e6d2" style="background-color: #f0e6d2;" title="Faded Yellow"></button>
+            <button class="w-6 h-6 border border-zinc-500 hover:border-white transition-colors color-btn" data-color="#f0d5d9" style="background-color: #f0d5d9;" title="Light Pink"></button>
+            <button class="w-6 h-6 border border-white transition-colors color-btn" data-color="#80c689" style="background-color: #80c689;" title="Retro Green"></button>
+            <button class="w-6 h-6 border border-zinc-500 hover:border-white transition-colors color-btn" data-color="#bba7d4" style="background-color: #bba7d4;" title="Faded Purple"></button>
+        </div>
+    </div>
+
+    <!-- 右下角：导出按钮 -->
+    <button id="export-btn" class="fixed bottom-6 right-6 border border-zinc-700 bg-black/80 backdrop-blur-sm text-zinc-300 px-6 py-2 text-sm tracking-widest uppercase hover:bg-white hover:text-black transition-all z-50 group flex items-center gap-2 cursor-pointer shadow-lg">
+        <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+        <span>Save</span>
+    </button>
+
+    <!-- 手机端长按保存图片专属遮罩层 -->
+    <div id="export-modal" class="fixed inset-0 bg-black/95 z-[100] hidden flex-col items-center justify-center p-4 opacity-0 transition-opacity duration-300">
+        <div class="text-white/80 text-xs sm:text-sm mb-6 tracking-widest uppercase animate-pulse text-center">
+            [ 长按下方图片保存至相册 ]<br/><span class="text-[10px] opacity-70">Long press image to save</span>
+        </div>
+        <img id="export-image" class="max-h-[75vh] w-auto max-w-full shadow-[0_0_50px_rgba(255,255,255,0.1)] rounded-sm pointer-events-auto select-none" src="" alt="Generated Receipt">
+        <button id="close-modal-btn" class="mt-8 border border-zinc-600 px-8 py-3 text-zinc-300 text-xs uppercase tracking-widest hover:bg-white hover:text-black transition-colors cursor-pointer">
+            Close / 返回
+        </button>
+    </div>
+
+    <!-- 小票外部容器 -->
+    <div id="receipt-wrapper" class="receipt-view transition-transform duration-500 m-auto flex-none w-[320px] sm:w-[360px]" style="filter: drop-shadow(0 25px 25px rgba(0,0,0,0.8));">
+        
+        <!-- 小票主体区域 -->
+        <div id="receipt-capture-area" class="w-full flex flex-col bg-transparent">
+            
+            <!-- 顶部锯齿 -->
+            <div id="edge-top" class="w-full h-[8px] bg-repeat-x transition-colors duration-300"></div>
+
+            <!-- 小票内部内容区 -->
+            <div id="receipt-main-body" class="px-6 py-4 flex flex-col font-receipt text-[#000000] transition-colors duration-300 relative" style="background-color: #80c689;">
+                
+                <!-- 真实的纸张褶皱纹理层 -->
+                <div id="texture-overlay" class="absolute inset-0 pointer-events-none z-0" style="background-image: url('9964cadffb3488eb67207c0556e8d189.jpg'); background-size: cover; background-position: center; mix-blend-mode: multiply; opacity: 0.65;"></div>
+
+                <div class="receipt-content flex flex-col w-full relative z-10">
+                    <!-- 顶部大标题 -->
+                    <div class="text-center mb-4">
+                        <h1 contenteditable="true" class="text-5xl font-bold uppercase tracking-tighter leading-none mb-1">N STORE</h1>
+                        <div class="text-xs uppercase tracking-widest opacity-70">
+                            * * * * * Receipt * * * * *
+                        </div>
+                    </div>
+
+                    <!-- 基本信息块 -->
+                    <div class="text-sm opacity-80 leading-tight mb-2">
+                        <div class="flex justify-between">
+                            <span>Date:</span>
+                            <span contenteditable="true" id="current-date"></span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span>Terminal:</span>
+                            <span contenteditable="true">01-MAIN</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span>Served by:</span>
+                            <span contenteditable="true">Admin</span>
+                        </div>
+                    </div>
+
+                    <div class="receipt-divider"></div>
+
+                    <!-- 图像处理区域 -->
+                    <div class="relative w-full aspect-[4/3] my-4 bg-black/5 flex items-center justify-center overflow-hidden group img-container cursor-pointer" onclick="document.getElementById('image-upload').click()">
+                        <input type="file" id="image-upload" accept="image/*" class="hidden">
+                        
+                        <div id="upload-placeholder" class="text-center opacity-40 flex flex-col items-center">
+                            <svg class="w-8 h-8 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                            <span class="text-sm">Click to upload image</span>
+                        </div>
+
+                        <!-- 图像展示 Canvas -->
+                        <canvas id="dither-canvas" class="absolute inset-0 w-full h-full object-cover opacity-100 hidden" style="image-rendering: pixelated;"></canvas>
+                        
+                        <div id="upload-overlay" class="absolute inset-0 bg-black/70 text-white flex items-center justify-center opacity-0 text-sm tracking-widest uppercase transition-opacity backdrop-blur-sm z-20">
+                            Change Image
+                        </div>
+                    </div>
+
+                    <div class="text-[10px] text-center opacity-60 uppercase tracking-widest mb-2 leading-none">
+                        [ Lo-Fi Dithered Print ]
+                    </div>
+
+                    <div class="receipt-divider"></div>
+
+                    <!-- 商品详情区域 -->
+                    <div id="item-list-container" class="flex flex-col gap-2 text-base my-2">
+                        <div class="flex justify-between items-end relative group item-row">
+                            <button class="delete-btn absolute -left-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer" title="Remove Item" onclick="removeItem(this)">×</button>
+                            <span contenteditable="true" class="flex-1 pr-2 uppercase">Custom Sticker Set</span>
+                            <span contenteditable="true">01</span>
+                        </div>
+                        <div class="flex justify-between items-end relative group item-row">
+                            <button class="delete-btn absolute -left-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer" title="Remove Item" onclick="removeItem(this)">×</button>
+                            <span contenteditable="true" class="flex-1 pr-2 uppercase">Artbook Vol.2</span>
+                            <span contenteditable="true">02</span>
+                        </div>
+                        <div class="flex justify-between items-end relative group item-row">
+                            <button class="delete-btn absolute -left-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer" title="Remove Item" onclick="removeItem(this)">×</button>
+                            <span contenteditable="true" class="flex-1 pr-2 uppercase">Coffee Bean 250g</span>
+                            <span contenteditable="true">01</span>
+                        </div>
+                    </div>
+                    
+                    <div class="text-center mt-1">
+                        <button id="add-item-btn" class="text-[10px] opacity-40 hover:opacity-100 transition-opacity uppercase tracking-widest cursor-pointer inline-block py-1">
+                            + Add Item
+                        </button>
+                    </div>
+
+                    <div class="receipt-divider"></div>
+
+                    <!-- 总计 -->
+                    <div class="flex justify-between items-end text-xl my-1">
+                        <span>TOTAL:</span>
+                        <span contenteditable="true">¥ 158.00</span>
+                    </div>
+
+                    <div class="receipt-divider"></div>
+
+                    <!-- 底部条形码与落款 -->
+                    <div class="mt-4 flex flex-col items-center">
+                        <div class="w-full h-12 flex items-stretch justify-center opacity-90 gap-[2px]" id="barcode-container">
+                            <!-- JS 动态填充 -->
+                        </div>
+                        <div class="text-xs tracking-[0.3em] mt-1">
+                            1092837465912
+                        </div>
+                    </div>
+
+                    <div class="mt-6 text-center text-sm opacity-80 uppercase leading-tight tracking-wider">
+                        <p>T H A N K &nbsp;&nbsp;Y O U</p>
+                        <p>H A V E &nbsp;A &nbsp;N I C E &nbsp;D A Y</p>
+                    </div>
+                    
+                    <div class="mt-4 text-[10px] text-center opacity-40">
+                        Retain this copy for your records.
+                    </div>
+                </div> 
+            </div>
+            
+            <!-- 底部锯齿 -->
+            <div id="edge-bottom" class="w-full h-[8px] bg-repeat-x transition-colors duration-300"></div>
+
+        </div>
+    </div>
+
+    <script>
+        // 自定义 Toast 提示功能
+        let toastTimeout;
+        function showToast(message) {
+            const toast = document.getElementById('toast-notification');
+            const msgSpan = document.getElementById('toast-message');
+            msgSpan.innerText = message;
+            toast.classList.remove('opacity-0');
+            clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(() => {
+                toast.classList.add('opacity-0');
+            }, 3500);
+        }
+
+        // 初始化当前时间
+        const now = new Date();
+        const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+        document.getElementById('current-date').innerText = dateStr;
+
+        // 生成模拟条形码
+        const barcodeContainer = document.getElementById('barcode-container');
+        const pattern = [2, 1, 4, 1, 1, 3, 2, 2, 1, 4, 2, 1, 1, 1, 3, 2, 1, 4, 1, 2, 2, 1, 1];
+        pattern.forEach(width => {
+            const bar = document.createElement('div');
+            bar.className = 'bg-[#000000]';
+            bar.style.width = `${width * 2}px`;
+            barcodeContainer.appendChild(bar);
+        });
+
+        // 颜色切换逻辑
+        const colorBtns = document.querySelectorAll('.color-btn');
+        const receiptMainBody = document.getElementById('receipt-main-body');
+        const edgeTop = document.getElementById('edge-top');
+        const edgeBottom = document.getElementById('edge-bottom');
+
+        function updateReceiptColor(hexColor) {
+            receiptMainBody.style.backgroundColor = hexColor;
+            const topSvg = `<svg width="8" height="8" xmlns="http://www.w3.org/2000/svg"><path d="M 0,8 L 0,0 A 4,4 0 0 0 8,0 L 8,8 Z" fill="${hexColor}"/></svg>`;
+            const bottomSvg = `<svg width="8" height="8" xmlns="http://www.w3.org/2000/svg"><path d="M 0,0 L 8,0 L 8,8 A 4,4 0 0 0 0,8 Z" fill="${hexColor}"/></svg>`;
+            edgeTop.style.backgroundImage = `url('data:image/svg+xml,${encodeURIComponent(topSvg)}')`;
+            edgeBottom.style.backgroundImage = `url('data:image/svg+xml,${encodeURIComponent(bottomSvg)}')`;
+        }
+
+        updateReceiptColor('#80c689');
+
+        colorBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                colorBtns.forEach(b => b.classList.replace('border-white', 'border-zinc-500'));
+                e.target.classList.replace('border-zinc-500', 'border-white');
+                updateReceiptColor(e.target.getAttribute('data-color'));
+            });
+        });
+
+        // 商品行动态增删逻辑
+        const itemListContainer = document.getElementById('item-list-container');
+        const addItemBtn = document.getElementById('add-item-btn');
+
+        addItemBtn.addEventListener('click', () => {
+            const newRow = document.createElement('div');
+            newRow.className = 'flex justify-between items-end relative group item-row';
+            newRow.innerHTML = `
+                <button class="delete-btn absolute -left-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer" title="Remove Item" onclick="removeItem(this)">×</button>
+                <span contenteditable="true" class="flex-1 pr-2 uppercase">New Item</span>
+                <span contenteditable="true">01</span>
+            `;
+            itemListContainer.appendChild(newRow);
+        });
+
+        window.removeItem = function(btn) {
+            const allRows = itemListContainer.querySelectorAll('.item-row');
+            if (allRows.length > 1) {
+                btn.closest('.item-row').remove();
+            } else {
+                const row = btn.closest('.item-row');
+                row.classList.add('animate-pulse');
+                setTimeout(() => row.classList.remove('animate-pulse'), 500);
+            }
+        };
+
+        // 图片处理
+        const imageUpload = document.getElementById('image-upload');
+        const canvas = document.getElementById('dither-canvas');
+        const ctx = canvas.getContext('2d');
+        const placeholder = document.getElementById('upload-placeholder');
+        const imgContainer = document.querySelector('.img-container');
+
+        imageUpload.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    canvas.classList.remove('hidden');
+                    placeholder.classList.add('hidden');
+
+                    const containerWidth = imgContainer.clientWidth;
+                    const containerHeight = imgContainer.clientHeight;
+                    
+                    const targetWidth = 800; 
+                    const targetHeight = targetWidth * (containerHeight / containerWidth);
+                    
+                    canvas.width = targetWidth;
+                    canvas.height = targetHeight;
+
+                    const imgRatio = img.width / img.height;
+                    const canvasRatio = canvas.width / canvas.height;
+                    
+                    let drawWidth = canvas.width;
+                    let drawHeight = canvas.height;
+                    let offsetX = 0;
+                    let offsetY = 0;
+
+                    if (imgRatio > canvasRatio) {
+                        drawWidth = canvas.height * imgRatio;
+                        offsetX = (canvas.width - drawWidth) / 2;
+                    } else {
+                        drawHeight = canvas.width / imgRatio;
+                        offsetY = (canvas.height - drawHeight) / 2;
+                    }
+
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+                    
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const pixels = imageData.data;
+
+                    for (let i = 0; i < pixels.length; i += 4) {
+                        let gray = pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114;
+                        pixels[i] = pixels[i + 1] = pixels[i + 2] = gray;
+                    }
+
+                    const w = canvas.width;
+                    const h = canvas.height;
+                    const getIndex = (x, y) => (y * w + x) * 4;
+
+                    for (let y = 0; y < h; y++) {
+                        for (let x = 0; x < w; x++) {
+                            const idx = getIndex(x, y);
+                            const oldPixel = pixels[idx];
+                            const newPixel = oldPixel < 128 ? 0 : 255; 
+                            
+                            pixels[idx] = pixels[idx + 1] = pixels[idx + 2] = newPixel;
+                            const quantError = oldPixel - newPixel;
+
+                            if (x + 1 < w) {
+                                const i = getIndex(x + 1, y);
+                                pixels[i] = pixels[i] + quantError * (7 / 16);
+                            }
+                            if (x - 1 >= 0 && y + 1 < h) {
+                                const i = getIndex(x - 1, y + 1);
+                                pixels[i] = pixels[i] + quantError * (3 / 16);
+                            }
+                            if (y + 1 < h) {
+                                const i = getIndex(x, y + 1);
+                                pixels[i] = pixels[i] + quantError * (5 / 16);
+                            }
+                            if (x + 1 < w && y + 1 < h) {
+                                const i = getIndex(x + 1, y + 1);
+                                pixels[i] = pixels[i] + quantError * (1 / 16);
+                            }
+                        }
+                    }
+
+                    for(let i=0; i<pixels.length; i+=4) {
+                        if(pixels[i] > 128) { 
+                            pixels[i+3] = 0; 
+                        } else {
+                            pixels[i] = 0;
+                            pixels[i+1] = 0;
+                            pixels[i+2] = 0;
+                            pixels[i+3] = 255;
+                        }
+                    }
+                    
+                    ctx.putImageData(imageData, 0, 0);
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // 导出图片核心逻辑
+        const exportBtn = document.getElementById('export-btn');
+        const wrapper = document.getElementById('receipt-wrapper');
+        const captureArea = document.getElementById('receipt-capture-area');
+        
+        const exportModal = document.getElementById('export-modal');
+        const exportImage = document.getElementById('export-image');
+        const closeModalBtn = document.getElementById('close-modal-btn');
+
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+        closeModalBtn.addEventListener('click', () => {
+            exportModal.classList.remove('opacity-100');
+            setTimeout(() => {
+                exportModal.classList.remove('flex');
+                exportModal.classList.add('hidden');
+                // 释放图片 Blob 内存
+                if (exportImage.src.startsWith('blob:')) {
+                    URL.revokeObjectURL(exportImage.src);
+                }
+                exportImage.src = ''; 
+            }, 300);
+        });
+
+        exportBtn.addEventListener('click', () => {
+            const originalTransform = wrapper.style.transform;
+            
+            wrapper.style.transition = 'none';
+            wrapper.classList.remove('receipt-view');
+            wrapper.style.transform = 'none';
+            
+            const originalText = exportBtn.innerHTML;
+            exportBtn.innerHTML = '<span class="animate-pulse">Processing...</span>';
+
+            setTimeout(() => {
+                html2canvas(captureArea, {
+                    backgroundColor: null,
+                    scale: isMobile ? 1.5 : 2, // 移动端 1.5 倍非常安全
+                    useCORS: true,
+                    logging: false,
+                    onclone: function (clonedDoc) {
+                        const clonedDeleteBtns = clonedDoc.querySelectorAll('.delete-btn');
+                        clonedDeleteBtns.forEach(btn => btn.style.display = 'none');
+                        
+                        const clonedAddBtn = clonedDoc.getElementById('add-item-btn');
+                        if (clonedAddBtn) clonedAddBtn.style.display = 'none';
+                        
+                        // 【最关键一步】直接将导致污染的纹理节点物理删除，而不是隐藏，根治污染问题
+                        const clonedTexture = clonedDoc.getElementById('texture-overlay');
+                        if (clonedTexture) {
+                            clonedTexture.remove();
+                        }
+                        
+                        const originalBody = document.getElementById('receipt-main-body');
+                        const clonedBody = clonedDoc.getElementById('receipt-main-body');
+                        if (originalBody && clonedBody) {
+                             clonedBody.style.backgroundColor = originalBody.style.backgroundColor;
+                        }
+                    }
+                }).then(canvas => {
+                    
+                    const restoreUI = () => {
+                        wrapper.classList.add('receipt-view');
+                        wrapper.style.transform = originalTransform || ''; 
+                        setTimeout(() => wrapper.style.transition = '', 50);
+                        exportBtn.innerHTML = originalText;
+                    };
+
+                    // 使用最高效的 Blob 处理图片，杜绝超长 Base64 导致的手机内存崩溃
+                    const displayOrDownloadBlob = (blob) => {
+                        try {
+                            const blobUrl = URL.createObjectURL(blob);
+                            if (isMobile) {
+                                exportImage.onload = () => {
+                                    exportModal.classList.remove('hidden');
+                                    exportModal.classList.add('flex');
+                                    requestAnimationFrame(() => {
+                                        exportModal.classList.add('opacity-100');
+                                    });
+                                };
+                                exportImage.src = blobUrl;
+                            } else {
+                                const link = document.createElement('a');
+                                link.download = `receipt_nstore_${new Date().getTime()}.png`;
+                                link.href = blobUrl;
+                                link.click();
+                                setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+                            }
+                        } catch (err) {
+                            console.error(err);
+                            showToast("图片展示时出错，请重试。");
+                        } finally {
+                            restoreUI();
+                        }
+                    };
+
+                    // 纯净画布保底导出法
+                    const fallbackToPureCanvas = () => {
+                        try {
+                            canvas.toBlob((blob) => {
+                                if (blob) {
+                                    displayOrDownloadBlob(blob);
+                                } else {
+                                    showToast("生成图片流失败，请重试。");
+                                    restoreUI();
+                                }
+                            }, 'image/png');
+                        } catch (fallbackErr) {
+                            console.error("保底导出亦失败:", fallbackErr);
+                            showToast("系统安全限制导致无法导出，请更换浏览器。");
+                            restoreUI();
+                        }
+                    };
+
+                    const textureImg = new Image();
+                    
+                    textureImg.onload = () => {
+                        try {
+                            const finalCanvas = document.createElement('canvas');
+                            finalCanvas.width = canvas.width;
+                            finalCanvas.height = canvas.height;
+                            const ctx = finalCanvas.getContext('2d');
+                            
+                            ctx.drawImage(canvas, 0, 0);
+                            
+                            const texCanvas = document.createElement('canvas');
+                            texCanvas.width = canvas.width;
+                            texCanvas.height = canvas.height;
+                            const texCtx = texCanvas.getContext('2d');
+                            
+                            const imgRatio = textureImg.width / textureImg.height;
+                            const canvasRatio = texCanvas.width / texCanvas.height;
+                            let drawW = texCanvas.width;
+                            let drawH = texCanvas.height;
+                            let drawX = 0;
+                            let drawY = 0;
+                            
+                            if (imgRatio > canvasRatio) {
+                                drawH = texCanvas.height;
+                                drawW = textureImg.width * (texCanvas.height / textureImg.height);
+                                drawX = (texCanvas.width - drawW) / 2;
+                            } else {
+                                drawW = texCanvas.width;
+                                drawH = textureImg.height * (texCanvas.width / textureImg.width);
+                                drawY = (texCanvas.height - drawH) / 2;
+                            }
+                            texCtx.drawImage(textureImg, drawX, drawY, drawW, drawH);
+                            
+                            texCtx.globalCompositeOperation = 'destination-in';
+                            texCtx.drawImage(canvas, 0, 0);
+                            
+                            ctx.globalCompositeOperation = 'multiply';
+                            ctx.globalAlpha = 0.65;
+                            ctx.drawImage(texCanvas, 0, 0);
+                            
+                            // 这里如果遇到由于 Github Pages 跨域导致被污染，toBlob 会立刻报错并跳入 catch
+                            finalCanvas.toBlob((blob) => {
+                                if (blob) {
+                                    displayOrDownloadBlob(blob);
+                                } else {
+                                    fallbackToPureCanvas();
+                                }
+                            }, 'image/png');
+
+                        } catch (e) {
+                            console.warn("纹理叠出跨域错误或内存不足，启动静默降级...", e);
+                            fallbackToPureCanvas();
+                        }
+                    };
+
+                    textureImg.onerror = () => {
+                        fallbackToPureCanvas();
+                    };
+                    
+                    textureImg.src = "9964cadffb3488eb67207c0556e8d189.jpg";
+
+                }).catch(err => {
+                    console.error('Export failed:', err);
+                    wrapper.classList.add('receipt-view');
+                    wrapper.style.transform = originalTransform || ''; 
+                    setTimeout(() => wrapper.style.transition = '', 50);
+                    exportBtn.innerHTML = originalText;
+                    showToast("底层渲染异常，请尝试刷新页面。");
+                });
+            }, 150); 
+        });
+    </script>
+</body>
+</html>
